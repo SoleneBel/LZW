@@ -1,0 +1,83 @@
+package main
+
+import (
+	"fmt"
+	"math/bits"
+)
+
+// Compress compresses a string using LZW algorithm with dynamic bit-length encoding
+func Compress(input string) []uint16 {
+	dictionary := make(map[string]uint16)
+	for i := 0; i < 256; i++ {
+		dictionary[string(byte(i))] = uint16(i)
+	}
+
+	var result []uint16
+	var current string
+	code := uint16(256)
+	maxCodeSize := uint16(512) // Starts with 9-bit encoding
+
+	for _, char := range input {
+		symbol := string(char)
+		if _, exists := dictionary[current+symbol]; exists {
+			current += symbol
+		} else {
+			result = append(result, dictionary[current])
+			dictionary[current+symbol] = code
+			code++
+			if code >= maxCodeSize {
+				maxCodeSize *= 2 // Increase bit size when limit is reached
+			}
+			current = symbol
+		}
+	}
+
+	if current != "" {
+		result = append(result, dictionary[current])
+	}
+
+	return result
+}
+
+// Decompress decompresses a list of codes using LZW algorithm with dynamic bit-length decoding
+func Decompress(compressed []uint16) string {
+	dictionary := make(map[uint16]string)
+	for i := 0; i < 256; i++ {
+		dictionary[uint16(i)] = string(byte(i))
+	}
+
+	code := uint16(256)
+	maxCodeSize := uint16(512)
+	current := dictionary[compressed[0]]
+	result := current
+
+	for _, k := range compressed[1:] {
+		var entry string
+		if val, exists := dictionary[k]; exists {
+			entry = val
+		} else if k == code {
+			entry = current + string(current[0])
+		} else {
+			panic("Invalid compressed data")
+		}
+
+		result += entry
+		dictionary[code] = current + string(entry[0])
+		code++
+		if code >= maxCodeSize {
+			maxCodeSize *= 2
+		}
+		current = entry
+	}
+
+	return result
+}
+
+func main() {
+	input := "ABABABABA"
+	compressed := Compress(input)
+	fmt.Println("Compressed:", compressed)
+
+	decompressed := Decompress(compressed)
+	fmt.Println("Decompressed:", decompressed)
+}

@@ -1,0 +1,74 @@
+package main
+
+import (
+	"fmt"
+)
+
+// Compress compresses a string using LZW algorithm with optimized storage
+func Compress(input string) []int {
+	dictionary := make(map[string]int)
+	for i := 0; i < 256; i++ {
+		dictionary[string(byte(i))] = i
+	}
+
+	var result []int
+	var current string
+	code := 256
+
+	for _, char := range input {
+		symbol := string(char)
+		if _, exists := dictionary[current+symbol]; exists {
+			current += symbol
+		} else {
+			result = append(result, dictionary[current])
+			dictionary[current+symbol] = code
+			code++
+			current = symbol
+		}
+	}
+
+	if current != "" {
+		result = append(result, dictionary[current])
+	}
+
+	return result
+}
+
+// Decompress decompresses a list of codes using LZW algorithm with optimized storage
+func Decompress(compressed []int) string {
+	dictionary := make(map[int]string)
+	for i := 0; i < 256; i++ {
+		dictionary[i] = string(byte(i))
+	}
+
+	code := 256
+	current := dictionary[compressed[0]]
+	result := current
+
+	for _, k := range compressed[1:] {
+		var entry string
+		if val, exists := dictionary[k]; exists {
+			entry = val
+		} else if k == code {
+			entry = current + string(current[0])
+		} else {
+			panic("Invalid compressed data")
+		}
+
+		result += entry
+		dictionary[code] = current + string(entry[0])
+		code++
+		current = entry
+	}
+
+	return result
+}
+
+func main() {
+	input := "ABABABABA"
+	compressed := Compress(input)
+	fmt.Println("Compressed:", compressed)
+
+	decompressed := Decompress(compressed)
+	fmt.Println("Decompressed:", decompressed)
+}

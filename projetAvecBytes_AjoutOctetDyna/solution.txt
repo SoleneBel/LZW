@@ -1,0 +1,211 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func splitInt(n int, k int) []int {
+	result := make([]int, k)
+	for i := 0; i < k; i++ {
+		result[i] = n & 0xFF
+		n >>= 8
+	}
+	return result
+}
+
+func packInt(chunks []int) int {
+	result := 0
+	for i := len(chunks) - 1; i >= 0; i-- {
+		result = (result << 8) | chunks[i]
+	}
+	return result
+}
+
+
+func readCode(data []byte, start int, k int) (int, bool) {
+	if start+k > len(data) {
+		return 0, false
+	}
+	chunks := make([]int, k)
+	for i := 0; i < k; i++ {
+		chunks[i] = int(data[start+i])
+	}
+	return packInt(chunks), true
+}
+
+func LZWCompresser(data []byte, dico map[string]int) []byte {
+	var w []byte
+	var result []byte
+	k := 1
+
+	for _, c := range data {
+		p := append(w, c)
+		if _, exists := dico[string(p)]; exists {
+			w = p
+		} else {
+			code := dico[string(w)]
+			bytesCode := splitInt(code, k)
+			for _, b := range bytesCode {
+				result = append(result, byte(b))
+			}
+			dico[string(p)] = len(dico)
+			w = []byte{c}
+
+			// Mise à jour stricte et synchronisée de k
+			if (1 << (8 * k)) <= len(dico) {
+				k++
+			}
+		}
+	}
+
+	if len(w) > 0 {
+		code := dico[string(w)]
+		bytesCode := splitInt(code, k)
+		for _, b := range bytesCode {
+			result = append(result, byte(b))
+		}
+	}
+
+	return result
+}
+
+func LZWDecompresser(data []byte, dico map[int][]byte) []byte {
+	var result []byte
+	k := 1
+	i := 0
+
+	if len(data) < k {
+		return result
+	}
+
+	v, ok := readCode(data, i, k)
+	if !ok {
+		return result
+	}
+	i += k
+
+	w := dico[v]
+	result = append(result, w...)
+
+	for i < len(data) {
+		// Mise à jour stricte de k
+		if (1 << (8 * k)) <= len(dico) {
+			k++
+		}
+
+		v, ok = readCode(data, i, k)
+		if !ok {
+			break
+		}
+		i += k
+
+		var entry []byte
+		if val, exists := dico[v]; exists {
+			entry = val
+		} else {
+			entry = append(w, w[0])
+		}
+
+		result = append(result, entry...)
+		dico[len(dico)] = bytes.Clone(append(w, entry[0]))
+		w = entry
+	}
+
+	return result
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: go run main.go <nom_du_fichier>")
+		return
+	}
+
+	testFile := os.Args[1]
+	fmt.Println("### Lempel / Ziv / Welch compression\n")
+
+	// --- COMPRESSION ---
+	fmt.Printf("## compressing file '%s'\n", testFile)
+	start := time.Now()
+	data, err := os.ReadFile(testFile)
+	if err != nil {
+		fmt.Println("Erreur de lecture du fichier :", err)
+		return
+	}
+	readDuration := time.Since(start)
+	fmt.Printf(">>> reading file:   (%6dms)  => %d bytes\n", readDuration.Milliseconds(), len(data))
+
+	dicoC := make(map[string]int)
+	for i := 0; i < 256; i++ {
+		dicoC[string([]byte{byte(i)})] = i
+	}
+
+	start = time.Now()
+	compressed := LZWCompresser(data, dicoC)
+	compDuration := time.Since(start)
+
+	ratio := 100 - int(float64(len(compressed))*100.0/float64(len(data)))
+	fmt.Printf(">>> compressing:    (%6dms)  => %d bytes, compression %d%%\n", compDuration.Milliseconds(), len(compressed), ratio)
+
+	ext := filepath.Ext(testFile)
+	base := strings.TrimSuffix(filepath.Base(testFile), ext)
+	compressedFile := base + "_compresse" + ext
+
+	start = time.Now()
+	err = ecrireDansFichier(compressedFile, compressed)
+	saveDuration := time.Since(start)
+	if err != nil {
+		fmt.Println("Erreur d'écriture (compression) :", err)
+		return
+	}
+	fmt.Printf(">>> saving:         (%6dms)\n", saveDuration.Milliseconds())
+	fmt.Printf("## compressed file '%s' saved\n\n", compressedFile)
+
+	// --- DECOMPRESSION ---
+	fmt.Printf("## decompressing file '%s'\n", compressedFile)
+
+	start = time.Now()
+	toDecod, err := lireBytesDepuisFichier(compressedFile)
+	if err != nil {
+		fmt.Println("Erreur de lecture (compression) :", err)
+		return
+	}
+	readDecDuration := time.Since(start)
+	fmt.Printf("<<< read file:      (%6dms)  => %d bytes\n", readDecDuration.Milliseconds(), len(toDecod))
+
+	dicoD := make(map[int][]byte)
+	for i := 0; i < 256; i++ {
+		dicoD[i] = []byte{byte(i)}
+	}
+
+	start = time.Now()
+	decompressed := LZWDecompresser(toDecod, dicoD)
+	decompDuration := time.Since(start)
+	fmt.Printf("<<< decompressing:  (%6dms)  => %d bytes\n", decompDuration.Milliseconds(), len(decompressed))
+
+	decompressedFile := base + "_decompresse" + ext
+	start = time.Now()
+	err = ecrireDansFichier(decompressedFile, decompressed)
+	writeDecDuration := time.Since(start)
+
+	if err != nil {
+		fmt.Println("Erreur d'écriture (décompression) :", err)
+		return
+	}
+	fmt.Printf("<<< saving:         (%6dms)\n", writeDecDuration.Milliseconds())
+	fmt.Printf("## decompressed file '%s' saved\n\n", decompressedFile)
+
+	// --- COMPARAISON ---
+	start = time.Now()
+	same := sameFiles(testFile, decompressedFile)
+	compareDuration := time.Since(start)
+	status := "FAIL"
+	if same {
+		status = "OK"
+	}
+	fmt.Printf("## comparing: %s    (%6dms)\n", status, compareDuration.Milliseconds())
+}
